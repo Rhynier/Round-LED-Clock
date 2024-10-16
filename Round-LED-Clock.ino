@@ -18,9 +18,11 @@
 #include <FastLED.h>
 #define DEBUG_ON
 
-const char ssid[] = "*";        // Your network SSID name here
-const char pass[] = "*";        // Your network password here
-unsigned long timeZone = 1.0;   // Change this value to your local timezone (in my case +1 for Amsterdam)
+const char ssid[] = "*";                          // Your network SSID name here
+const char pass[] = "*";                          // Your network password here
+unsigned long timeZone = 1.0;                     // Change this value to your local timezone (in my case +1 for Amsterdam)
+const char* NTPServerName = "nl.pool.ntp.org";    // Change this to a ntpserver nearby, check this site for a list of servers: https://www.pool.ntp.org/en/
+unsigned long intervalNTP = 24 * 60 * 60000;      // Request a new NTP time every 24 hours
 
 // Change the colors here if you want.
 // Check for reference: https://github.com/FastLED/FastLED/wiki/Pixel-reference#predefined-colors-list
@@ -29,15 +31,26 @@ unsigned long timeZone = 1.0;   // Change this value to your local timezone (in 
 CRGB colorHour = CRGB::Red;
 CRGB colorMinute = CRGB::Green;
 CRGB colorSecond = CRGB::Blue;
+CRGB colorHourMinute = CRGB::Yellow;
+CRGB colorHourSecond = CRGB::Magenta;
+CRGB colorMinuteSecond = CRGB::Cyan;
+CRGB colorAll = CRGB::White;
+
+// Set this to true if you want the hour LED to move between hours (if set to false the hour LED will only move every hour)
+#define USE_LED_MOVE_BETWEEN_HOURS true
+
+// Cutoff times for day / night brightness.
+#define USE_NIGHTCUTOFF false   // Enable/Disable night brightness
+#define MORNINGCUTOFF 8         // When does daybrightness begin?   8am
+#define NIGHTCUTOFF 20          // When does nightbrightness begin? 10pm
+#define NIGHTBRIGHTNESS 20      // Brightness level from 0 (off) to 255 (full brightness)
 
 ESP8266WiFiMulti wifiMulti;                     
 WiFiUDP UDP;                                    
 IPAddress timeServerIP;                         
-const char* NTPServerName = "time.nist.gov";    
 const int NTP_PACKET_SIZE = 48;                 
 byte NTPBuffer[NTP_PACKET_SIZE];                
 
-unsigned long intervalNTP = 5 * 60000; // Request NTP time every 5 minutes
 unsigned long prevNTP = 0;
 unsigned long lastNTPResponse = millis();
 uint32_t timeUNIX = 0;
@@ -115,22 +128,61 @@ void loop() {
     for (int i=0; i<NUM_LEDS; i++) 
       LEDs[i] = CRGB::Black;
 
-    LEDs[getLEDMinuteOrSecond(currentDateTime.second)] = colorSecond;
-    LEDs[getLEDHour(currentDateTime.hour)] = colorHour;
-    LEDs[getLEDMinuteOrSecond(currentDateTime.minute)] = colorMinute;    
+    int second = getLEDMinuteOrSecond(currentDateTime.second);
+    int minute = getLEDMinuteOrSecond(currentDateTime.minute);
+    int hour = getLEDHour(currentDateTime.hour, currentDateTime.minute);
+
+    // Set "Hands"
+    LEDs[second] = colorSecond;
+    LEDs[minute] = colorMinute;  
+    LEDs[hour] = colorHour;  
+
+    // Hour and min are on same spot
+    if ( hour == minute)
+      LEDs[hour] = colorHourMinute;
+
+    // Hour and sec are on same spot
+    if ( hour == second)
+      LEDs[hour] = colorHourSecond;
+
+    // Min and sec are on same spot
+    if ( minute == second)
+      LEDs[minute] = colorMinuteSecond;
+
+    // All are on same spot
+    if ( minute == second && minute == hour)
+      LEDs[minute] = colorAll;
+
+    if ( night() && USE_NIGHTCUTOFF == true )
+      FastLED.setBrightness (NIGHTBRIGHTNESS); 
 
     FastLED.show();
   }  
 }
 
-byte getLEDHour(byte hours) {
+byte getLEDHour(byte hours, byte minutes) {
   if (hours > 12)
     hours = hours - 12;
 
+  byte hourLED;
   if (hours <= 5) 
-    return (hours * 5) + 30;
+    hourLED = (hours * 5) + 30;
   else
-    return (hours * 5) - 30;
+    hourLED = (hours * 5) - 30;
+
+  if (USE_LED_MOVE_BETWEEN_HOURS == true) {
+    if        (minutes >= 12 && minutes < 24) {
+      hourLED += 1;
+    } else if (minutes >= 24 && minutes < 36) {
+      hourLED += 2;
+    } else if (minutes >= 36 && minutes < 48) {
+      hourLED += 3;
+    } else if (minutes >= 48) {
+      hourLED += 4;
+    }
+  }
+
+  return hourLED;  
 }
 
 byte getLEDMinuteOrSecond(byte minuteOrSecond) {
@@ -256,6 +308,8 @@ void convertTime(uint32_t time) {
   Serial.print(currentDateTime.dayofweek);
   Serial.print(" summer time: ");
   Serial.print(summerTime());
+  Serial.print(" night time: ");
+  Serial.print(night());  
   Serial.println();
 #endif  
 }
@@ -268,4 +322,10 @@ boolean summerTime() {
   return true;
     else
   return false;
+}
+
+boolean night() {
+  
+  if (currentDateTime.hour >= NIGHTCUTOFF && currentDateTime.hour <= MORNINGCUTOFF) 
+    return true;    
 }
